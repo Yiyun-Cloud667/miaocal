@@ -7,8 +7,17 @@ export function occursOn(e: CalEvent, iso: string): boolean {
   const r: Recur = e.recur
   const d = new Date(iso + 'T00:00:00')
   if (r.freq === 'daily') return true
-  if (r.freq === 'weekly') return ((d.getDay() + 6) % 7) + 1 === (r.byDay ?? 1)
+  if (r.freq === 'weekly') {
+    const dow = ((d.getDay() + 6) % 7) + 1
+    const by = r.byDay ?? 1
+    return Array.isArray(by) ? by.includes(dow) : dow === by
+  }
   if (r.freq === 'monthly') return d.getDate() === (r.byDay ?? 1)
+  if (r.freq === 'interval') {
+    const start = new Date(e.startDate + 'T00:00:00')
+    const diff = Math.round((d.getTime() - start.getTime()) / 86400000)
+    return diff >= 0 && diff % (Number(r.byDay) || 2) === 0
+  }
   return false
 }
 
@@ -27,7 +36,8 @@ export function occurrencesInRange(e: CalEvent, startISO: string, endISO: string
 export function recurLabel(r?: Recur): string {
   if (!r) return ''
   if (r.freq === 'daily') return '每天'
-  if (r.freq === 'weekly') return `每周${'一二三四五六日'[(r.byDay ?? 1) - 1]}`
+  if (r.freq === 'interval') return `每隔${(Number(r.byDay) || 2) - 1}天`
   if (r.freq === 'monthly') return `每月${r.byDay}号`
-  return ''
+  if (Array.isArray(r.byDay)) return '每个工作日'
+  return `每周${'一二三四五六日'[(r.byDay as number ?? 1) - 1]}`
 }

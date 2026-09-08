@@ -4,10 +4,10 @@ import { parseSchedule, COLOR_PALETTE } from '@/lib/parser'
 import { useSpeech } from '@/hooks/useSpeech'
 
 const EXAMPLES = [
-  '明天下午3点到5点开项目评审会',
-  '9月10号到9月15号出差去深圳',
-  '下周三上午体检',
-  '今晚8点陪家人吃饭',
+  '明天下午三点半和张总开会',
+  '从明天开始出差三天',
+  '每个工作日早上9点站会',
+  '半小时后提醒我喝水',
 ]
 
 export default function VoiceBar(props: {

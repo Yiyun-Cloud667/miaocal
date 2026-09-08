@@ -1,8 +1,8 @@
 /** 重复规则 */
 export interface Recur {
-  freq: 'daily' | 'weekly' | 'monthly'
-  /** weekly: 1-7（周一=1）；monthly: 1-31 */
-  byDay?: number
+  freq: 'daily' | 'weekly' | 'monthly' | 'interval'
+  /** weekly: 1-7（周一=1）或工作日数组 [1..5]；monthly: 1-31；interval: 每 N 天 */
+  byDay?: number | number[]
 }
 
 /** 日程事件数据模型 */

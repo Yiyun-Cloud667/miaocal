@@ -1,10 +1,11 @@
 /**
- * 中文自然语言日程解析引擎
- * 组合策略：chrono-node 中文解析器 + 自定义规则（上午/下午/晚上时段、
- * “A到B”区间合并、时间点区间、标题抽取、语义配色）
+ * 中文自然语言日程解析引擎（生产级）
+ * 组合策略：chrono-node 中文解析器（日期） + 自研规则层：
+ * 中文数字时刻、时段词、时刻区间、星期表达式、重复规则（每周/每天/每月/工作日/隔天）、
+ * 持续天数（出差三天）、相对时间（半小时后）、标题抽取、语义配色
  */
 import * as chrono from 'chrono-node'
-import type { ParsedDraft } from '@/types/event'
+import type { ParsedDraft, Recur } from '@/types/event'
 
 const zh = chrono.zh.hans
 
@@ -20,6 +21,42 @@ function sameDay(a: Date, b: Date) {
   return toISODate(a) === toISODate(b)
 }
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+/* ---------- 中文数字（0–99） ---------- */
+
+const CN_DIGIT: Record<string, number> = {
+  零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+}
+
+function cnNum(s: string): number | null {
+  if (!s) return null
+  if (/^\d+$/.test(s)) return Number(s)
+  if (s === '十') return 10
+  const m = /^([一二两三四五六七八九])?十([零一二三四五六七八九])?$/.exec(s)
+  if (m) return (m[1] ? CN_DIGIT[m[1]] : 1) * 10 + (m[2] ? CN_DIGIT[m[2]] : 0)
+  if (s.length === 1 && s in CN_DIGIT) return CN_DIGIT[s]
+  return null
+}
+
+/** 把时间语境里的中文数字转成阿拉伯数字（“三点半”→“3点半”，“一刻”→“15分”） */
+function cnTimeToDigits(text: string): string {
+  return text.replace(
+    /(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上)?([零一二两三四五六七八九十]{1,3})点(半|一刻|([零一二两三四五六七八九十]{1,3})分)?/g,
+    (all, mer, hCN, minPart, minCN) => {
+      const h = cnNum(hCN)
+      if (h === null || h > 24) return all
+      let min = ''
+      if (minPart === '半') min = '半'
+      else if (minPart === '一刻') min = '15分'
+      else if (minCN) {
+        const mm = cnNum(minCN)
+        if (mm === null) return all
+        min = `${mm}分`
+      }
+      return `${mer ?? ''}${h}点${min}`
+    },
+  )
+}
 
 /* ---------- 语义配色 ---------- */
 
@@ -37,11 +74,11 @@ export const COLOR_PALETTE: Record<
 }
 
 const COLOR_RULES: Array<[RegExp, string]> = [
-  [/会议|开会|评审|汇报|面试|客户|周报|站会|工作|加班|述职|谈(判|合作)/, 'work'],
+  [/会议|开会|评审|汇报|面试|客户|周报|站会|工作|加班|述职|谈(判|合作)|材料|报告|答辩/, 'work'],
   [/出差|旅行|旅游|机票|高铁|火车|航班|飞|酒店|度假|返程|接机|送机/, 'travel'],
-  [/健身|跑步|运动|瑜伽|游泳|体检|看病|医院|复诊|牙医|牙科|锻炼|打球/, 'health'],
-  [/生日|聚会|聚餐|吃饭|约会|婚礼|派对|看电影|逛街|陪|家人/, 'social'],
-  [/学习|读书|看书|课程|考试|复习|论文|作业|上课|培训|讲座|自习/, 'study'],
+  [/健身|跑步|运动|瑜伽|游泳|体检|看病|医院|复诊|牙医|牙科|锻炼|打球|吃药|午睡|喝水/, 'health'],
+  [/生日|聚会|聚餐|吃饭|约会|婚礼|派对|看电影|逛街|陪|家人|孩子|妈妈|电话/, 'social'],
+  [/学习|读书|看书|课程|考试|复习|论文|作业|上课|培训|讲座|自习|英语|图书馆/, 'study'],
 ]
 
 export function pickColor(title: string): string {
@@ -60,86 +97,110 @@ const SLOT: Record<string, [string, string]> = {
   下午: ['14:00', '18:00'],
   傍晚: ['17:00', '19:00'],
   晚上: ['19:00', '22:00'],
-  今晚: ['19:00', '22:00'],
   全天: ['', ''],
 }
 
-/* ---------- 时间点区间：下午3点到5点 ---------- */
+const MER_RE = /凌晨|早上|早晨|上午|中午|下午|傍晚|晚上/
+
+function applyMeridiem(hh: number, mer: string | undefined): number {
+  if (mer && /下午|傍晚|晚上/.test(mer) && hh < 12) return hh + 12
+  if (mer && /中午/.test(mer) && hh < 11) return hh + 12
+  return hh
+}
+
+/* ---------- 时刻提取 ---------- */
 
 interface TimeRange {
   start: string
   end: string
-  /** 命中的原始文本（用于从标题中剔除） */
   text: string
-  index: number
 }
 
+const MIN_RE = '(\\d{1,2}|半)'
+const MIN_OPT = `(?:${MIN_RE}\\s*分?)?`
+
+/** 时刻区间：下午3点到5点 / 九点到十一点半（已转阿拉伯） */
 function extractClockRange(text: string): TimeRange | null {
-  const re =
-    /(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})\s*(?:[:：点])\s*(\d{1,2}|半)?\s*分?\s*(?:到|至|~|～|—|–|-)\s*(凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*(\d{1,2})\s*(?:[:：点])\s*(\d{1,2}|半)?\s*分?/
+  const re = new RegExp(
+    `(${MER_RE.source})?\\s*(\\d{1,2})\\s*[:：点]\\s*${MIN_OPT}\\s*(?:到|至|~|～|—|–|-)\\s*(${MER_RE.source})?\\s*(\\d{1,2})\\s*[:：点]\\s*${MIN_OPT}`,
+  )
   const m = re.exec(text)
   if (!m) return null
-  const toHM = (mer: string | undefined, h: string, min: string | undefined, isEnd: boolean) => {
-    let hh = Number(h)
-    let mm = min === '半' ? 30 : min ? Number(min) : 0
-    if (mer && /下午|傍晚|晚上/.test(mer) && hh < 12) hh += 12
-    if (mer && /中午/.test(mer) && hh < 11) hh += 12
-    if (!mer && !isEnd && /下午|傍晚|晚上/.test(m[1] ?? '') && hh < 12) hh += 12
-    return `${pad(hh)}:${pad(mm)}`
+  const mm = (v: string | undefined) => (v === '半' ? 30 : v ? Number(v) : 0)
+  let sh = applyMeridiem(Number(m[2]), m[1])
+  let eh = Number(m[5])
+  // 结束时刻未带时段 → 沿用开始时段
+  eh = applyMeridiem(eh, m[4] ?? m[1])
+  return {
+    start: `${pad(sh)}:${pad(mm(m[3]))}`,
+    end: `${pad(eh)}:${pad(mm(m[6]))}`,
+    text: m[0],
   }
-  const start = toHM(m[1], m[2], m[3], false)
-  const end = toHM(m[4] ?? m[1], m[5], m[6], true)
-  return { start, end, text: m[0], index: m.index }
 }
 
-/** 单时间点：下午3点 / 15:30 */
+/** 单时刻：下午3点 / 15:30 / 十点前（截止） */
 function extractClock(text: string): TimeRange | null {
-  const re = /(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上)\s*(\d{1,2})\s*(?:[:：点])\s*(\d{1,2}|半)?\s*分?|(\d{1,2})\s*[:：]\s*(\d{2})/
+  const re = new RegExp(
+    `(${MER_RE.source})\\s*(\\d{1,2})\\s*[:：点]\\s*${MIN_OPT}(前|之前)?|(\\d{1,2})\\s*[:：]\\s*(\\d{2})`,
+  )
   const m = re.exec(text)
   if (!m) return null
   let hh: number, mm: number
-  if (m[4] !== undefined) {
-    hh = Number(m[4]); mm = Number(m[5])
+  if (m[5] !== undefined) {
+    hh = Number(m[5]); mm = Number(m[6])
   } else {
-    hh = Number(m[2]); mm = m[3] === '半' ? 30 : m[3] ? Number(m[3]) : 0
-    if (/下午|傍晚|晚上/.test(m[1]) && hh < 12) hh += 12
-    if (/中午/.test(m[1]) && hh < 11) hh += 12
+    hh = applyMeridiem(Number(m[2]), m[1])
+    mm = m[3] === '半' ? 30 : m[3] ? Number(m[3]) : 0
   }
-  return { start: `${pad(hh)}:${pad(mm)}`, end: '', text: m[0], index: m.index }
+  return { start: `${pad(hh)}:${pad(mm)}`, end: '', text: m[0] }
 }
 
-/** 裸时段词（无具体钟点）：明天上午 / 9月10号晚上 */
-function extractSlot(text: string): { key: string; text: string; index: number } | null {
-  const re = /(凌晨|早上|早晨|上午|中午|下午|傍晚|晚上|全天)/
-  const m = re.exec(text)
+/** 裸时段词 / 双时段（上午和下午都） */
+function extractSlot(text: string): { key: string; text: string } | null {
+  const dual = new RegExp(`(${MER_RE.source})(?:和|与)(${MER_RE.source})(?:都|也)?`).exec(text)
+  if (dual) return { key: dual[1], text: dual[0] }
+  const m = new RegExp(`(${MER_RE.source}|全天)`).exec(text)
   if (!m) return null
-  return { key: m[1], text: m[0], index: m.index }
+  return { key: m[1], text: m[0] }
 }
 
-/* ---------- 标题抽取 ---------- */
+/* ---------- 相对时间：半小时后 / 两小时后 ---------- */
 
-const FILLER =
-  /^(?:嗯|那个|就是|然后呢?|帮我把|帮我|麻烦|请|我要|我想|我得|我需要|我打算|我计划|记得|提醒我|到时候提醒我|安排一下|安排|记录一下|记一下|新增|添加|加个|有一个|有个|有|去|说|可能|大概|差不多)[，,。.\s]*/
-
-function cleanTitle(text: string, removals: string[]): string {
-  let t = text
-  // 剔除已识别的时间片段（按长度降序，避免子串冲突；同时尝试 trim 版本）
-  const all = [...new Set(removals.flatMap((r) => [r, r.trim()]).filter(Boolean))]
-  for (const r of all.sort((a, b) => b.length - a.length)) {
-    t = t.split(r).join(' ')
-  }
-  t = t.replace(/从|起|开始|为止|结束/g, ' ')
-  let prev = ''
-  while (prev !== t) {
-    prev = t
-    t = t.trim().replace(FILLER, '')
-  }
-  t = t.replace(/^(?:的|要|得|去)+/, '').replace(/[，,。.\s]+$/, '').trim()
-  t = t.replace(/\s{2,}/g, ' ')
-  return t
+function extractRelative(text: string, ref: Date): { at: Date; text: string } | null {
+  const m = /(半|([0-9]+)|([零一二两三四五六七八九十]{1,3}))(?:个)?(小时|钟头|分钟)后/.exec(text)
+  if (!m) return null
+  let amount: number | null = null
+  if (m[1] === '半') amount = 0.5
+  else if (m[2]) amount = Number(m[2])
+  else if (m[3]) amount = cnNum(m[3])
+  if (amount === null) return null
+  const mins = /分钟/.test(m[4]) ? amount : amount * 60
+  const at = new Date(ref.getTime() + Math.round(mins) * 60000)
+  return { at, text: m[0] }
 }
 
-/* ---------- 星期表达式（chrono 对“周五晚上”等组合不稳，自处理） ---------- */
+/* ---------- 持续天数：出差三天 / 连续加班五天 / 为期一周 ---------- */
+
+function extractDuration(text: string): { days: number; text: string } | null {
+  let m = /(?:持续|连续|为期|共)\s*([0-9]+|[零一二两三四五六七八九十]{1,3})\s*(天|日|周|星期)/.exec(text)
+  if (!m) m = /([0-9]+|[零一二两三四五六七八九十]{1,3})\s*天(?!后)/.exec(text)
+  if (!m) return null
+  const n = /^\d+$/.test(m[1]) ? Number(m[1]) : cnNum(m[1])
+  if (!n) return null
+  const unit = m[2] ?? '天'
+  const days = /周|星期/.test(unit) ? n * 7 : n
+  return { days, text: m[0] }
+}
+
+/** 裸「N天后」：三天后交报告 */
+function extractDaysLater(text: string): { days: number; text: string } | null {
+  const m = /([0-9]+|[零一二两三四五六七八九十]{1,3})\s*天后/.exec(text)
+  if (!m) return null
+  const n = /^\d+$/.test(m[1]) ? Number(m[1]) : cnNum(m[1])
+  return n ? { days: n, text: m[0] } : null
+}
+
+/* ---------- 星期表达式 ---------- */
 
 const WEEKDAY_NUM: Record<string, number> = {
   一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7,
@@ -147,18 +208,17 @@ const WEEKDAY_NUM: Record<string, number> = {
 }
 
 function extractWeekday(text: string, ref: Date): { date: Date; text: string } | null {
-  const re = /(下下个|下个|下个|下|这|这个|本|上)?\s*(?:周|星期|礼拜)([一二三四五六日天1-7])/
+  const re = /(下下个|下下|下个|下|这|这个|本|上)?\s*(?:周|星期|礼拜)([一二三四五六日天1-7])/
   const m = re.exec(text)
   if (!m) return null
   const num = WEEKDAY_NUM[m[2]]
-  const refDow = (ref.getDay() + 6) % 7 // 周一=0
+  const refDow = (ref.getDay() + 6) % 7
   const monday = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - refDow)
   let weekOffset = 0
   if (/下下个|下下/.test(m[1] ?? '')) weekOffset = 2
   else if (/下/.test(m[1] ?? '')) weekOffset = 1
   else if (/上/.test(m[1] ?? '')) weekOffset = -1
   let d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + weekOffset * 7 + (num - 1))
-  // 无前缀且已过去 → 顺延到下周
   if (!m[1]) {
     const todayStart = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate())
     if (d < todayStart) d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7)
@@ -166,20 +226,33 @@ function extractWeekday(text: string, ref: Date): { date: Date; text: string } |
   return { date: d, text: m[0] }
 }
 
-function normalize(text: string): string {
-  return text
-    .replace(/今晚/g, '今天晚上')
-    .replace(/明晚/g, '明天晚上')
-    .replace(/明儿/g, '明天')
-}
-
-/* ---------- 重复规则：每周五 / 每天 / 每月15号 ---------- */
+/* ---------- 重复规则 ---------- */
 
 function extractRecur(
   text: string,
   ref: Date,
-): { recur: import('@/types/event').Recur; start: Date; text: string } | null {
-  let m = /每(?:个)?(?:周|星期|礼拜)([一二三四五六日天1-7])/.exec(text)
+): { recur: Recur; start: Date; text: string } | null {
+  // 每个工作日
+  let m = /每(?:个)?(?:一)?个?工作日/.exec(text)
+  if (m) {
+    const todayStart = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate())
+    let d = new Date(todayStart)
+    const dow = (d.getDay() + 6) % 7 + 1
+    if (dow > 5) d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + (8 - dow))
+    return { recur: { freq: 'weekly', byDay: [1, 2, 3, 4, 5] }, start: d, text: m[0] }
+  }
+  // 每隔 N 天 / 隔天
+  m = /每隔\s*([0-9]+|[零一二两三四五六七八九十]{1,3})\s*天|隔天|隔一天/.exec(text)
+  if (m) {
+    let n = 2
+    if (m[1]) n = (/^\d+$/.test(m[1]) ? Number(m[1]) : cnNum(m[1]) ?? 1) + 1
+    return {
+      recur: { freq: 'interval', byDay: n },
+      start: new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()),
+      text: m[0],
+    }
+  }
+  m = /每(?:个)?(?:周|星期|礼拜)([一二三四五六日天1-7])/.exec(text)
   if (m) {
     const num = WEEKDAY_NUM[m[1]]
     const refDow = (ref.getDay() + 6) % 7
@@ -194,7 +267,7 @@ function extractRecur(
     const day = Math.min(31, Number(m[1]))
     let d = new Date(ref.getFullYear(), ref.getMonth(), day)
     const todayStart = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate())
-    if (d < todayStart) d = new Date(ref.getFullYear(), ref.getMonth() + 1, day)
+    if (d < todayStart) d = new Date(d.getFullYear(), d.getMonth() + 1, day)
     return { recur: { freq: 'monthly', byDay: day }, start: d, text: m[0] }
   }
   m = /每(?:个)?(?:天|日)/.exec(text)
@@ -208,6 +281,37 @@ function extractRecur(
   return null
 }
 
+function normalize(text: string): string {
+  return cnTimeToDigits(
+    text
+      .replace(/今晚/g, '今天晚上')
+      .replace(/明晚/g, '明天晚上')
+      .replace(/明儿/g, '明天'),
+  )
+}
+
+/* ---------- 标题抽取 ---------- */
+
+const FILLER =
+  /^(?:嗯|那个|就是|然后呢?|帮我把|帮我|麻烦|请|我要|我想|我得|我需要|我打算|我计划|记得|提醒我|到时候提醒我|安排一下|安排|记录一下|记一下|新增|添加|加个|有一个|有个|有|说|可能|大概|差不多|从|那天|到时候|开始)[，,。.\s]*/
+
+function cleanTitle(text: string, removals: string[]): string {
+  let t = text
+  const all = [...new Set(removals.flatMap((r) => [r, r.trim()]).filter(Boolean))]
+  for (const r of all.sort((a, b) => b.length - a.length)) {
+    t = t.split(r).join(' ')
+  }
+  t = t.replace(/到|至|为止|结束/g, ' ')
+  let prev = ''
+  while (prev !== t) {
+    prev = t
+    t = t.trim().replace(FILLER, '')
+  }
+  t = t.replace(/^(?:的|要|得)+/, '').replace(/[，,。.\s]+$/, '').trim()
+  t = t.replace(/\s{2,}/g, ' ')
+  return t
+}
+
 /* ---------- 主入口 ---------- */
 
 export function parseSchedule(inputRaw: string, refDate: Date = new Date()): ParsedDraft | null {
@@ -218,13 +322,21 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
   let startTime = ''
   let endTime = ''
 
-  // 1) 先由自定义规则接管“日内时刻”，chrono 只负责日期
   let rest = text
   const remove = (s: string) => { rest = rest.replace(s, ' ') }
 
-  // 0) 重复规则（每周五 / 每天 / 每月15号）
+  // 0a) 相对时间：半小时后 / 两小时后
+  const rel = extractRelative(rest, refDate)
+  let relAt: Date | null = null
+  if (rel) {
+    relAt = rel.at
+    matchedTexts.push(rel.text)
+    remove(rel.text)
+  }
+
+  // 0b) 重复规则
   const recurHit = extractRecur(rest, refDate)
-  let recur: import('@/types/event').Recur | undefined
+  let recur: Recur | undefined
   let recurStart: Date | null = null
   if (recurHit) {
     recur = recurHit.recur
@@ -233,6 +345,7 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
     remove(recurHit.text)
   }
 
+  // 1) 日内时刻
   const clockRange = extractClockRange(rest)
   const clock = clockRange ?? extractClock(rest)
   if (clock) {
@@ -251,7 +364,14 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
     }
   }
 
-  // 2) 星期表达式（如 下周三 / 周五）
+  // 2) 持续天数（“出差三天”）
+  const duration = extractDuration(rest)
+  if (duration) {
+    matchedTexts.push(duration.text)
+    remove(duration.text)
+  }
+
+  // 3) 星期表达式
   const weekday = extractWeekday(rest, refDate)
   let weekdayDate: Date | null = null
   if (weekday) {
@@ -260,7 +380,7 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
     remove(weekday.text)
   }
 
-  // 2.5) 同月简写区间：“9月10号到15号”
+  // 4) 同月简写区间：“9月10号到15号”
   let monthRange: { start: Date; end: Date; text: string } | null = null
   {
     const re = /(\d{1,2})\s*月\s*(\d{1,2})\s*[号日]\s*(?:到|至|~|～|—|–|-)\s*(\d{1,2})\s*[号日]/
@@ -268,7 +388,6 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
     if (m) {
       const month = Number(m[1]) - 1
       let year = refDate.getFullYear()
-      // 月份已过去较多 → 视为明年（forward 语义）
       if (month < refDate.getMonth() - 1) year += 1
       monthRange = {
         start: new Date(year, month, Number(m[2])),
@@ -280,7 +399,16 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
     }
   }
 
-  // 3) chrono 解析日期（rest 已剥离时刻与星期）
+  // 5) 裸「N天后」
+  const daysLater = extractDaysLater(rest)
+  if (daysLater) {
+    matchedTexts.push(daysLater.text)
+    remove(daysLater.text)
+  }
+
+  // 6) chrono 解析日期
+  // 重复规则存在且文本已无显式日期词 → 直接以“下次发生日”为准
+  const hasExplicitDate = /明|今|后|昨|月|号|日|周|星期|礼拜|天/.test(rest)
   const results = zh.parse(rest, refDate, { forwardDate: true })
   let startD: Date | null = null
   let endD: Date | null = null
@@ -288,15 +416,14 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
   if (monthRange) {
     startD = monthRange.start
     endD = monthRange.end
+  } else if (recur && recurStart && !hasExplicitDate) {
+    startD = recurStart
   } else if (results.length > 0) {
     startD = results[0].start.date()
     endD = results[0].end ? results[0].end.date() : null
     matchedTexts.push(results[0].text)
     if (results.length > 1) {
-      const between = rest.slice(
-        results[0].index + results[0].text.length,
-        results[1].index,
-      )
+      const between = rest.slice(results[0].index + results[0].text.length, results[1].index)
       if (/^(?:\s*(?:到|至|直到|~|～|—|–|-)\s*)$/.test(between)) {
         endD = results[1].end ? results[1].end.date() : results[1].start.date()
         matchedTexts.push(between, results[1].text)
@@ -305,34 +432,81 @@ export function parseSchedule(inputRaw: string, refDate: Date = new Date()): Par
   } else if (weekdayDate) {
     startD = weekdayDate
   } else if (recurStart) {
-    // 只有重复规则、没有显式日期 → 从下一次发生日开始
     startD = recurStart
+  } else if (relAt) {
+    startD = relAt
+  } else if (daysLater) {
+    startD = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate() + daysLater.days)
+  } else {
+    // 7) 裸日号：“15号发工资”
+    const m = /(?<![月号日点])\s*(\d{1,2})\s*[号日]/.exec(rest)
+    if (m) {
+      const day = Number(m[1])
+      let d = new Date(refDate.getFullYear(), refDate.getMonth(), day)
+      const todayStart = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate())
+      if (d < todayStart) d = new Date(d.getFullYear(), d.getMonth() + 1, day)
+      startD = d
+      matchedTexts.push(m[0].trim())
+    }
   }
 
   if (!startD) return null
 
-  // 重复事件归一为单日（从首次发生日开始）
-  if (recur) {
-    endD = null
-  }
-
-  // 4) chrono 命中的日期可能与自定义星期冲突 → 以星期为准（如“周五晚上”）
+  // 星期冲突仲裁（如“周五晚上”chrono 误读“晚上”为今天）
   if (weekdayDate && results.length > 0 && !sameDay(startD, weekdayDate)) {
-    // 若 chrono 命中的不是完整日期（只是“明天”类），信任星期
     if (!results[0].start.isCertain('day') || !/[号日月]/.test(results[0].text)) {
       startD = weekdayDate
       if (endD) endD = weekdayDate
     }
   }
 
-  // 5) 自定义时刻接管时，chrono 携带的跨日 end 归零（“下午3点到5点”被 chrono 误拉到次日）
+  // 时刻区间由自定义规则接管时，chrono 误带的跨日 end 归零
   if (clockRange && endD && !sameDay(startD, endD)) {
     endD = null
   }
 
+  // 相对时间：日期与时刻都由它决定
+  if (relAt) {
+    startD = relAt
+    endD = null
+    startTime = `${pad(relAt.getHours())}:${pad(relAt.getMinutes())}`
+    endTime = ''
+  }
+
+  // 持续天数
+  if (!endD && duration && duration.days > 1) {
+    endD = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate() + duration.days - 1)
+  }
+
+  // 重复事件归一单日
+  if (recur) endD = null
+
+  // 重复事件今天的发生时刻已过 → 从下一次发生日开始
+  if (recur && startTime && sameDay(startD, refDate)) {
+    const nowHM = `${pad(refDate.getHours())}:${pad(refDate.getMinutes())}`
+    if (startTime <= nowHM) {
+      const d = new Date(startD)
+      for (let i = 1; i <= 370; i++) {
+        const cand = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i)
+        const dow = ((cand.getDay() + 6) % 7) + 1
+        const by = recur.byDay
+        const hit =
+          recur.freq === 'daily' ? true
+          : recur.freq === 'monthly' ? cand.getDate() === Number(by ?? 1)
+          : recur.freq === 'interval' ? i % (Number(by) || 2) === 0
+          : Array.isArray(by) ? by.includes(dow)
+          : dow === Number(by ?? 1)
+        if (hit) {
+          startD = cand
+          break
+        }
+      }
+    }
+  }
+
   if (endD && endD < startD) [startD, endD] = [endD, startD]
 
-  // 6) chrono 自带确定时刻且我们没有解析出时刻（如“明晚8点”被规范化后已接管，此处兜底）
+  // chrono 自带确定时刻兜底
   if (!startTime && results[0]?.start.isCertain('hour')) {
     startTime = `${pad(startD.getHours())}:${pad(startD.getMinutes())}`
     if (endD && sameDay(startD, endD) && results[0].end?.isCertain('hour')) {
@@ -364,7 +538,7 @@ function buildSummary(
   eISO: string,
   st: string,
   et: string,
-  recur?: import('@/types/event').Recur,
+  recur?: Recur,
 ): string {
   const s = new Date(sISO + 'T00:00:00')
   const e = new Date(eISO + 'T00:00:00')
@@ -372,8 +546,12 @@ function buildSummary(
   const dayPart =
     sISO === eISO ? fmt(s) : `${fmt(s)} — ${fmt(e)} · 共 ${Math.round((e.getTime() - s.getTime()) / 86400000) + 1} 天`
   const timePart = st ? (et ? `${st}–${et}` : `${st}`) : '全天'
-  const recurPart = recur
-    ? ` · 🔁 ${recur.freq === 'daily' ? '每天' : recur.freq === 'weekly' ? `每周${'一二三四五六日'[(recur.byDay ?? 1) - 1]}` : `每月${recur.byDay}号`}（首次 ${dayPart}）`
-    : ''
-  return recur ? `${timePart}${recurPart}` : `${dayPart} · ${timePart}`
+  if (!recur) return `${dayPart} · ${timePart}`
+  let rl = ''
+  if (recur.freq === 'daily') rl = '每天'
+  else if (recur.freq === 'monthly') rl = `每月${recur.byDay}号`
+  else if (recur.freq === 'interval') rl = `每隔${Number(recur.byDay) - 1}天`
+  else if (Array.isArray(recur.byDay)) rl = '每个工作日'
+  else rl = `每周${'一二三四五六日'[(recur.byDay as number ?? 1) - 1]}`
+  return `${timePart} · 🔁 ${rl}（首次 ${dayPart}）`
 }
