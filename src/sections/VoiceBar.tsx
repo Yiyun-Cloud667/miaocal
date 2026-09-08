@@ -45,17 +45,15 @@ export default function VoiceBar(props: {
   return (
     <div className="flex h-full flex-col">
       {/* 阿顽 Wynn · 品牌 IP 语音助手 */}
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-1 flex items-center gap-3">
         <img
           src="./mascot.png"
           alt="阿顽 Wynn"
-          className="h-12 w-12 rounded-full bg-white object-cover ring-2 ring-[#FF8A00]/30"
+          className="h-12 w-12 shrink-0 rounded-full bg-white object-cover ring-2 ring-[#FF8A00]/30"
         />
-        <div>
-          <div className="whitespace-nowrap text-[11px] tracking-wider text-stone-400">阿顽 Wynn · 语音小助手</div>
-          <div className="font-serif-cn whitespace-nowrap text-lg text-[#0F1326]">说一句，就安排上</div>
-        </div>
+        <div className="min-w-0 text-[11px] tracking-wider text-stone-400">阿顽 Wynn · 语音小助手</div>
       </div>
+      <div className="font-serif-cn mb-4 text-lg text-[#0F1326]">说一句，就安排上</div>
 
       {/* 麦克风 */}
       <div className="mb-4 flex flex-col items-center">
@@ -141,8 +139,8 @@ export default function VoiceBar(props: {
       )}
       {failed && <div className="mt-3 text-xs text-amber-600">{failed}</div>}
 
-      {/* 示例 */}
-      <div className="mt-auto pt-6">
+      {/* 示例：紧跟输入区，避免中部空荡 */}
+      <div className="mt-5">
         <div className="mb-2 text-[11px] text-stone-400">试试这样说</div>
         <div className="space-y-1.5">
           {EXAMPLES.map((ex) => (
@@ -155,6 +153,21 @@ export default function VoiceBar(props: {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* 底部品牌装饰带：有意填充余白 */}
+      <div className="mt-auto flex items-end justify-between pt-6">
+        <div className="pb-1">
+          <div className="text-[10px] tracking-widest text-stone-300">NAUGHTY CAT</div>
+          <div className="text-[10px] tracking-widest text-stone-300">顽皮猫 · 出品</div>
+        </div>
+        <img
+          src="./mascot.png"
+          alt=""
+          aria-hidden
+          className="h-16 w-16 object-contain opacity-25 grayscale-0 select-none"
+          draggable={false}
+        />
       </div>
     </div>
   )

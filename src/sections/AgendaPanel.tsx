@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { CalEvent } from '@/types/event'
 import type { DiaryEntry } from '@/types/diary'
 import { eventsOnDay } from '@/hooks/useEvents'
+import { occursOn } from '@/lib/recur'
 import { COLOR_PALETTE } from '@/lib/parser'
 import { recurLabel } from '@/lib/recur'
 import { holidayOf } from '@/lib/holidays'
@@ -27,6 +28,26 @@ export default function AgendaPanel(props: {
   const isToday = iso === (() => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}` })()
   const holiday = holidayOf(iso)
   const pending = list.filter((e) => !e.done).length
+
+  // 本周概览（周一至周日）
+  const [weekCount, weekDone] = (() => {
+    const base = new Date(iso + 'T00:00:00')
+    const mondayOffset = (base.getDay() + 6) % 7
+    let count = 0
+    let done = 0
+    const seen = new Set<string>()
+    for (let i = 0; i < 7; i++) {
+      const day = new Date(base.getFullYear(), base.getMonth(), base.getDate() - mondayOffset + i)
+      const dayISO = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+      for (const e of events) {
+        if (seen.has(e.id) || !occursOn(e, dayISO)) continue
+        seen.add(e.id)
+        count++
+        if (e.done) done++
+      }
+    }
+    return [count, done]
+  })()
 
   return (
     <div className="flex h-full flex-col">
@@ -133,6 +154,16 @@ export default function AgendaPanel(props: {
           </div>
         )}
       </div>
+
+      {/* 底部概览条：填充余白 + 提供一周反馈 */}
+      {events.length > 0 && (
+        <div className="mt-auto pt-4">
+          <div className="flex items-center justify-between gap-2 whitespace-nowrap rounded-xl bg-stone-50 px-3 py-2 text-[10px] text-stone-400">
+            <span>本周 {weekCount} 项 · 已完成 {weekDone}</span>
+            <span className="text-[#FF8A00]">坚持每一天 🐾</span>
+          </div>
+        </div>
+      )}
         </>
       )}
     </div>
