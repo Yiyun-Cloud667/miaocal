@@ -31,8 +31,26 @@ export default function VoiceBar(props: {
     }
   }, [])
 
-  const { listening, interim, supported, toggle } = useSpeech(
-    useCallback((t: string) => handleText(t, 'voice'), [handleText]),
+  // 语音最终段：多段连续说话时累加进输入框并重新解析
+  const { listening, interim, error: voiceError, supported, toggle } = useSpeech(
+    useCallback(
+      (t: string) => {
+        setText((prev) => {
+          const next = prev ? prev.replace(/[，,。\s]+$/, '') + '，' + t : t
+          setSource('voice')
+          const d = parseSchedule(next)
+          if (d) {
+            setDraft(d)
+            setFailed('')
+          } else {
+            setDraft(null)
+            setFailed('没有听出时间信息，可以带上「明天 / 周几 / 几月几号」再说一次')
+          }
+          return next
+        })
+      },
+      [],
+    ),
   )
 
   const commit = () => {
@@ -75,13 +93,18 @@ export default function VoiceBar(props: {
             <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
           </svg>
         </button>
-        <div className="mt-2 text-[11px] text-stone-400">
+        <div className="mt-2 text-center text-[11px] text-stone-400">
           {!supported
             ? '当前环境不支持语音识别，可直接键盘输入'
             : listening
-              ? '正在聆听… 说完自动识别'
+              ? '正在聆听… 说完再点一下结束'
               : '点一下，说出你的安排'}
         </div>
+        {voiceError && (
+          <div className="mt-2 max-w-[220px] rounded-lg bg-amber-50 px-3 py-2 text-center text-[11px] leading-5 text-amber-700">
+            {voiceError}
+          </div>
+        )}
       </div>
 
       {/* 文本输入 */}
