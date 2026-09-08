@@ -44,15 +44,15 @@ export default function VoiceBar(props: {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 墨爪 Noir · 品牌 IP 语音助手 */}
+      {/* 阿顽 Wynn · 品牌 IP 语音助手 */}
       <div className="mb-4 flex items-center gap-3">
         <img
           src="./mascot.png"
-          alt="墨爪 Noir"
-          className="h-12 w-12 rounded-full bg-[#FFEEDB] p-1 ring-1 ring-orange-200"
+          alt="阿顽 Wynn"
+          className="h-12 w-12 rounded-full bg-white object-cover ring-2 ring-[#FF8A00]/30"
         />
         <div>
-          <div className="text-xs tracking-widest text-stone-400">墨爪 Noir · 语音小助手</div>
+          <div className="whitespace-nowrap text-[11px] tracking-wider text-stone-400">阿顽 Wynn · 语音小助手</div>
           <div className="font-serif-cn whitespace-nowrap text-lg text-[#0F1326]">说一句，就安排上</div>
         </div>
       </div>

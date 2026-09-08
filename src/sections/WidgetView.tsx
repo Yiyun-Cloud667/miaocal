@@ -237,7 +237,10 @@ function WidgetDiary(props: {
           ))}
         </div>
         {moodInfo && (
-          <span className="text-[10px]" style={{ color: moodInfo.color }}>
+          <span
+            className="rounded-full px-2 py-0.5 text-[10px] text-white"
+            style={{ backgroundColor: moodInfo.color }}
+          >
             {moodInfo.label}
           </span>
         )}

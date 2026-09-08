@@ -94,20 +94,25 @@ export default function AgendaPanel(props: {
                 <div className={`truncate text-sm text-stone-700 ${e.done ? 'line-through' : ''}`}>
                   {e.title}
                 </div>
-                <div className="mt-0.5 flex items-center gap-2 text-[11px] text-stone-400">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: c.dot }} />
-                  {e.startTime ? (e.endTime ? `${e.startTime}–${e.endTime}` : e.startTime) : '全天'}
+                <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-stone-400">
+                  <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: c.dot }} />
+                  <span className="shrink-0">
+                    {e.startTime ? (e.endTime ? `${e.startTime}–${e.endTime}` : e.startTime) : '全天'}
+                  </span>
                   {multi && (
-                    <span>
-                      · {Number(e.startDate.slice(8))}日—{Number(e.endDate.slice(8))}日
+                    <span className="shrink-0">
+                      · {Number(e.startDate.slice(8))}—{Number(e.endDate.slice(8))}日
                     </span>
                   )}
-                  <span className="rounded bg-stone-100 px-1 py-px text-[10px] text-stone-400">
+                  <span className="shrink-0 rounded bg-stone-100 px-1 py-px text-[10px] text-stone-400">
                     {c.label}
                   </span>
                   {e.recur && (
-                    <span className="rounded bg-stone-100 px-1 py-px text-[10px] text-stone-400">
-                      🔁 {recurLabel(e.recur)}
+                    <span
+                      title={`${recurLabel(e.recur)}重复`}
+                      className="shrink-0 rounded bg-stone-100 px-1 py-px text-[10px] text-stone-400"
+                    >
+                      🔁
                     </span>
                   )}
                 </div>
