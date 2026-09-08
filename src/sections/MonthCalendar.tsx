@@ -207,7 +207,7 @@ export default function MonthCalendar(props: {
                       }}
                     >
                       {!seg.isStart && '▸ '}
-                      {seg.event.recur && seg.isStart && '🔁 '}
+                      {seg.event.recur && seg.isStart && seg.colEnd > seg.colStart && '🔁 '}
                       {seg.event.title}
                     </button>
                   )

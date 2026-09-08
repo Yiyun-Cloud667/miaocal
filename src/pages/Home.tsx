@@ -40,6 +40,15 @@ export default function Home() {
     return () => clearInterval(t)
   }, [])
 
+  // ?add=1 直接打开新建日程弹窗（深链）
+  useEffect(() => {
+    if (location.search.includes('add=1') || location.hash.includes('add=1')) {
+      setEditing(null)
+      setDialogOpen(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const monthLabel = useMemo(() => `${viewY} 年 ${viewM + 1} 月`, [viewY, viewM])
 
   // 有手记的日期 → 心情颜色标记点

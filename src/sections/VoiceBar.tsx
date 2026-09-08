@@ -94,7 +94,7 @@ export default function VoiceBar(props: {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && text.trim()) handleText(text.trim(), 'manual')
           }}
-          placeholder='也可以打字，例如「周五下午3点见客户」'
+          placeholder="也可以打字输入…"
           className="min-w-0 flex-1 rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-stone-700 outline-none focus:border-stone-400"
         />
         <button

@@ -91,8 +91,15 @@ export default function AgendaPanel(props: {
                 )}
               </button>
               <button className="min-w-0 flex-1 text-left" onClick={() => props.onOpenEvent(e)}>
-                <div className={`truncate text-sm text-stone-700 ${e.done ? 'line-through' : ''}`}>
-                  {e.title}
+                <div className="flex items-center gap-1.5">
+                  <div className={`min-w-0 truncate text-sm text-stone-700 ${e.done ? 'line-through' : ''}`}>
+                    {e.title}
+                  </div>
+                  {e.recur && (
+                    <span title={`${recurLabel(e.recur)}重复`} className="shrink-0 text-[10px] text-stone-400">
+                      🔁
+                    </span>
+                  )}
                 </div>
                 <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-stone-400">
                   <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: c.dot }} />
@@ -107,14 +114,6 @@ export default function AgendaPanel(props: {
                   <span className="shrink-0 rounded bg-stone-100 px-1 py-px text-[10px] text-stone-400">
                     {c.label}
                   </span>
-                  {e.recur && (
-                    <span
-                      title={`${recurLabel(e.recur)}重复`}
-                      className="shrink-0 rounded bg-stone-100 px-1 py-px text-[10px] text-stone-400"
-                    >
-                      🔁
-                    </span>
-                  )}
                 </div>
               </button>
             </div>
