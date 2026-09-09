@@ -78,7 +78,7 @@ export default function VoiceBar(props: {
         />
         <div className="min-w-0 text-[11px] tracking-wider text-stone-400">阿顽 Wynn · 语音小助手</div>
       </div>
-      <div className="font-serif-cn mb-4 text-center text-lg text-[#0F1326]">说一句，就安排上</div>
+      <div className="mb-4" />
 
       {/* 麦克风 */}
       <div className="mb-4 flex flex-col items-center">
