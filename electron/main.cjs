@@ -6,6 +6,9 @@
  */
 const { app, BrowserWindow, Menu, Tray, nativeImage, shell } = require('electron')
 const path = require('path')
+const { registerASR } = require('./asr.cjs')
+
+const PRELOAD = path.join(__dirname, 'preload.cjs')
 
 let mainWin = null
 let widgetWin = null
@@ -30,7 +33,7 @@ function createMainWindow() {
     title: '猫历 MiaoCal',
     backgroundColor: '#f5f4f1',
     icon: path.join(__dirname, '../build/icon.png'),
-    webPreferences: { contextIsolation: true },
+    webPreferences: { contextIsolation: true, preload: PRELOAD },
   })
   loadURL(mainWin, '/')
   mainWin.on('closed', () => (mainWin = null))
@@ -52,7 +55,7 @@ function createWidget() {
     skipTaskbar: true,
     hasShadow: false,
     title: '猫历小组件',
-    webPreferences: { contextIsolation: true },
+    webPreferences: { contextIsolation: true, preload: PRELOAD },
   })
   // 点击穿透关闭（保持可拖动）；拖动区域由 CSS -webkit-app-region 控制
   loadURL(widgetWin, '/widget')
@@ -74,6 +77,11 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  // Dock 图标（开发模式也显示品牌图标；打包后由 electron-builder 处理）
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(nativeImage.createFromPath(path.join(__dirname, '../build/icon.png')))
+  }
+  registerASR()
   // --widget：仅启动桌面小组件；默认启动主窗口
   if (process.argv.includes('--widget')) {
     createWidget()

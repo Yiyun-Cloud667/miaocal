@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import type { ParsedDraft } from '@/types/event'
 import { parseSchedule, COLOR_PALETTE } from '@/lib/parser'
 import { useSpeech } from '@/hooks/useSpeech'
+import { useOfflineASR } from '@/hooks/useOfflineASR'
 
 const EXAMPLES = [
   '明天下午三点半和张总开会',
@@ -32,26 +33,32 @@ export default function VoiceBar(props: {
   }, [])
 
   // 语音最终段：多段连续说话时累加进输入框并重新解析
-  const { listening, interim, error: voiceError, supported, toggle } = useSpeech(
-    useCallback(
-      (t: string) => {
-        setText((prev) => {
-          const next = prev ? prev.replace(/[，,。\s]+$/, '') + '，' + t : t
-          setSource('voice')
-          const d = parseSchedule(next)
-          if (d) {
-            setDraft(d)
-            setFailed('')
-          } else {
-            setDraft(null)
-            setFailed('没有听出时间信息，可以带上「明天 / 周几 / 几月几号」再说一次')
-          }
-          return next
-        })
-      },
-      [],
-    ),
+  const onVoiceFinal = useCallback(
+    (t: string) => {
+      setText((prev) => {
+        const next = prev ? prev.replace(/[，,。\s]+$/, '') + '，' + t : t
+        setSource('voice')
+        const d = parseSchedule(next)
+        if (d) {
+          setDraft(d)
+          setFailed('')
+        } else {
+          setDraft(null)
+          setFailed('没有听出时间信息，可以带上「明天 / 周几 / 几月几号」再说一次')
+        }
+        return next
+      })
+    },
+    [],
   )
+
+  // 桌面端优先离线识别（不依赖外网），浏览器退化为在线 Web Speech
+  const offline = useOfflineASR(onVoiceFinal)
+  const web = useSpeech(onVoiceFinal)
+  const useOffline = offline.supported
+  const { listening, interim, toggle } = useOffline ? offline : web
+  const voiceError = useOffline ? offline.error : web.error
+  const supported = useOffline ? offline.supported : web.supported
 
   const commit = () => {
     if (!draft) return
@@ -71,7 +78,7 @@ export default function VoiceBar(props: {
         />
         <div className="min-w-0 text-[11px] tracking-wider text-stone-400">阿顽 Wynn · 语音小助手</div>
       </div>
-      <div className="font-serif-cn mb-4 text-lg text-[#0F1326]">说一句，就安排上</div>
+      <div className="font-serif-cn mb-4 text-center text-lg text-[#0F1326]">说一句，就安排上</div>
 
       {/* 麦克风 */}
       <div className="mb-4 flex flex-col items-center">
@@ -100,6 +107,11 @@ export default function VoiceBar(props: {
               ? '正在聆听… 说完再点一下结束'
               : '点一下，说出你的安排'}
         </div>
+        {useOffline && (
+          <div className="mt-1.5 rounded-full bg-[#EDE8FF] px-2.5 py-0.5 text-[10px] text-[#5E2EC0]">
+            离线识别 · 无需联网
+          </div>
+        )}
         {voiceError && (
           <div className="mt-2 max-w-[220px] rounded-lg bg-amber-50 px-3 py-2 text-center text-[11px] leading-5 text-amber-700">
             {voiceError}
